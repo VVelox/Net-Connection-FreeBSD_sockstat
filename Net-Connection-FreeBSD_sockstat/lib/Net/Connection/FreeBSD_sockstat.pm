@@ -8,7 +8,7 @@ use Proc::ProcessTable;
 require Exporter;
  
 our @ISA = qw(Exporter);
-our @EXPORT=qw(lsof_to_nc_objects);
+our @EXPORT=qw(sockstat_to_nc_objects);
 
 =head1 NAME
 
@@ -189,14 +189,17 @@ sub sockstat_to_nc_objects {
 
 			# get the local and foreign IPs
 			# not just splitting on \: as that will match IPv$
-			my $ip;
-			my $port;
-			( $ip, $port ) = split( /\:[\*0123456789]+$/, $line_split[5] );
-			$args->{local_host} = $ip;
-			$args->{local_port} = $port;
-			( $ip, $port ) = split( /\:[\*0123456789]+$/, $line_split[6] );
-			$args->{foreign_host} = $ip;
-			$args->{foreign_port} = $port;
+			$args->{local_host} = $line_split[5];
+			$args->{local_host} =~ s/\:[\*0123456789]+$//;
+
+			$args->{local_port} = $line_split[5];
+			$args->{local_port} =~ s/^.*\://;
+
+			$args->{foreign_host} = $line_split[6];
+			$args->{foreign_host} =~ s/\:[\*0123456789]+$//;
+
+			$args->{foreign_port} = $line_split[6];
+			$args->{foreign_port} =~ s/^.*\://;
 
 			# state is going to be the last item in the array if it is not UDP
 			if ( $args->{proto} !~ /^udp/ ) {
