@@ -3,6 +3,12 @@ package Net::Connection::FreeBSD_sockstat;
 use 5.006;
 use strict;
 use warnings;
+use Net::Connection;
+use Proc::ProcessTable;
+require Exporter;
+ 
+our @ISA = qw(Exporter);
+our @EXPORT=qw(lsof_to_nc_objects);
 
 =head1 NAME
 
@@ -10,43 +16,261 @@ Net::Connection::FreeBSD_sockstat - The great new Net::Connection::FreeBSD_socks
 
 =head1 VERSION
 
-Version 0.01
+Version 0.0.1
 
 =cut
 
-our $VERSION = '0.01';
+our $VERSION = '0.0.1';
 
 
 =head1 SYNOPSIS
 
-Quick summary of what the module does.
+=head1 SUBROUTINES
 
-Perhaps a little code snippet.
+=head2 sockstat_to_nc_objects
 
-    use Net::Connection::FreeBSD_sockstat;
+=head3 args hash
 
-    my $foo = Net::Connection::FreeBSD_sockstat->new();
-    ...
+=head4 ports
 
-=head1 EXPORT
+Attempt to resolve the port names.
 
-A list of functions that can be exported.  You can delete this section
-if you don't export anything, such as for a purely object-oriented module.
+Defaults to 1.
 
-=head1 SUBROUTINES/METHODS
+This value is a Perl boolean.
 
-=head2 function1
+=head4 ptrs
+
+Attempt to resolve the PTRs.
+
+Defaults to 1.
+
+This value is a Perl boolean.
+
+=head4 proc_info
+
+Load up the process table and use that to fill in additional info.
+
+This is incompatible with the string option.
+
+This defaults to true if no string is specified.
+
+This value is a Perl boolean.
+
+=head4 string
+
+If this is specified, it parses the string instead of calling sockstat.
+
+If running this on anything other than FreeBSD with out passing this, it will die.
+
+=head4 zombie_skip
+
+This skips items with connections that died but are still in the table.
+
+This skips lines like the one below.
+
+    USER     COMMAND    PID   FD PROTO  LOCAL ADDRESS         FOREIGN ADDRESS       PATH STATE   CONN STATE
+    ?        ?          ?     ?  tcp6   ::1:4045              *:*                                LISTEN
+
+This defaults to 1.
+
+The value taken is a Perl boolean.
 
 =cut
 
-sub function1 {
-}
+sub sockstat_to_nc_objects {
+	my %func_args;
+	if ( defined( $_[0] ) ) {
+		%func_args = %{ $_[0] };
+	}
 
-=head2 function2
+	#
+	# set the defaults for the various args
+	#
+	if ( !defined( $func_args{proc_info} ) ) {
 
-=cut
+		# if a string is set, default to false
+		if ( defined( $func_args{string} ) ) {
+			$func_args{proc_info} = 0;
+		}
+		else {
+			$func_args{proc_info} = 1;
+		}
+	}
+	if ( !defined( $func_args{ptrs} ) ) {
+		$func_args{ptrs} = 1;
+	}
+	if ( !defined( $func_args{ports} ) ) {
+		$func_args{ports} = 1;
+	}
+	if ( !defined( $func_args{zombie_skip} ) ) {
+		$func_args{zombie_skip} = 1;
+	}
 
-sub function2 {
+	my $output_raw;
+	if ( defined( $func_args{string} ) ) {
+		$output_raw = $func_args{string};
+
+		if ( $func_args{proc_info} ) {
+			die('Function args string and proc_info are mutually exclusive');
+		}
+	}
+
+	if ( !defined($output_raw) ) {
+		$output_raw = `sockstat -46s`;
+		if ( $^O !~ /freebsd/ ) {
+			die('According to $^O, this is not FreeBSD and this is specifically written for FreeBSDs sockstat');
+		}
+	}
+
+	# split the lines of the raw
+	my @output_lines = split( /\n/, $output_raw );
+
+	# holds the Net::Conection objects
+	my @nc_objects;
+
+	# process info caches
+	my %pid_proc;
+	my %pid_pctmem;
+	my %pid_pctcpu;
+	my %pid_wchan;
+	my %pid_start;
+
+	# load the process table up if needed.
+	my $proc_table;
+	my $physmem;
+	if ( $func_args{proc_info} ) {
+		my $pt = Proc::ProcessTable->new;
+		$proc_table = $pt->table;
+		$physmem    = `/sbin/sysctl -a hw.physmem`;
+		chomp($physmem);
+		$physmem =~ s/^.*\: //;
+	}
+
+	# process each line
+	my $line_int = 1;
+	while ( defined( $output_lines[$line_int] ) ) {
+
+		# skip this line if it is a zombie connection info
+		my $process_line = 1;
+		if ( ( $output_lines[$line_int] =~ /^\?/ ) && $func_args{zombie_skip} ) {
+			$process_line = 0;
+		}
+		if ($process_line) {
+
+			my $line = $output_lines[$line_int];
+
+			my @line_split = split( /[\ \t]+/, $line );
+
+			# USER     COMMAND    PID   FD PROTO  LOCAL ADDRESS         FOREIGN ADDRESS       PATH STATE   CONN STATE
+			# kitsune  firefox    10942 44 tcp4   192.168.15.2:21084    162.159.130.234:443                CLOSED
+			# ?        ?          ?     ?  tcp6   ::1:4045              *:*                                LISTEN
+
+			my $uid      = '?';
+			my $pid      = '?';
+			my $username = '?';
+			if ( $line_split[0] ne '?' ) {
+				$pid      = $line_split[2];
+				$uid      = getpwnam( $line_split[0] );
+				$username = $line_split[0];
+			}
+
+			# the basic args initially for Net::Connection
+			my $args = {
+				pid         => $pid,
+				uid         => $uid,
+				username    => $username,
+				state       => '',
+				proto       => $line_split[4],
+				ports       => $func_args{ports},
+				ptrs        => $func_args{ptrs},
+				uid_resolve => $func_args{uid_resolve},
+			};
+
+			# get the local and foreign IPs
+			# not just splitting on \: as that will match IPv$
+			my $ip;
+			my $port;
+			( $ip, $port ) = split( /\:[\*0123456789]+$/, $line_split[5] );
+			$args->{local_host} = $ip;
+			$args->{local_port} = $port;
+			( $ip, $port ) = split( /\:[\*0123456789]+$/, $line_split[6] );
+			$args->{foreign_host} = $ip;
+			$args->{foreign_port} = $port;
+
+			# state is going to be the last item in the array if it is not UDP
+			if ( $args->{proto} !~ /^udp/ ) {
+				$args->{state} = $line_split[-1];
+			}
+
+			#
+			# put together process info if requested
+			# skips adding it if the UID is ? as that means that the proc no longer exists
+			#
+			if ( $func_args{proc_info}
+				&& ( $args->{uid} ne '?' ) )
+			{
+				# if possible used cached info
+				if ( defined( $pid_proc{ $args->{pid} } ) ) {
+					$args->{proc}      = $pid_proc{ $args->{pid} };
+					$args->{wchan}     = $pid_wchan{ $args->{pid} };
+					$args->{pctmem}    = $pid_pctmem{ $args->{pid} };
+					$args->{pctcpu}    = $pid_pctcpu{ $args->{pid} };
+					$args->{pid_start} = $pid_start{ $args->{pid} };
+				}
+				else {
+					my $loop     = 1;
+					my $proc_int = 0;
+					while ( defined( $proc_table->[$proc_int] )
+						&& $loop )
+					{
+
+						# matched
+						if ( $proc_table->[$proc_int]->{pid} eq $args->{pid} ) {
+
+							# exit the loop
+							$loop = 0;
+
+							# fetch and save the proc info
+							if ( $proc_table->[$proc_int]->cmndline =~ /^$/ ) {
+
+								# kernel proc
+								$args->{proc} = '[' . $proc_table->[$proc_int]->{fname} . ']';
+							}
+							else {
+								# non-kernel proc
+								$args->{proc} = $proc_table->[$proc_int]->{cmndline};
+							}
+							$pid_proc{ $args->{pid} } = $args->{proc};
+
+							$args->{wchan} = $proc_table->[$proc_int]->{wchan};
+							$pid_wchan{ $args->{pid} } = $args->{wchan};
+
+							$args->{pid_start} = $proc_table->[$proc_int]->{pid_start};
+							$pid_start{ $args->{pid} } = $args->{pid_start};
+
+							$args->{pctcpu} = $proc_table->[$proc_int]->{pctcpu};
+							$pid_pctcpu{ $args->{pid} } = $args->{pctcpu};
+
+							$args->{pctmem} = ( ( $proc_table->[$proc_int]->{rssize} * 1024 * 4 ) / $physmem ) * 100;
+
+							$pid_pctmem{ $args->{pid} } = $args->{pctmem};
+						}
+
+						$proc_int++;
+					}
+				}
+
+			}
+
+			push( @nc_objects, Net::Connection->new($args) );
+		}
+
+		$line_int++;
+
+	}
+
+	return @nc_objects;
 }
 
 =head1 AUTHOR
