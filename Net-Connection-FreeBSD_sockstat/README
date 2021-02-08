@@ -1,15 +1,18 @@
 Net-Connection-FreeBSD_sockstat
 
-The README is used to introduce the module and provide instructions on
-how to install the module, any machine dependencies it may have (for
-example C compilers and installed libraries) and any other information
-that should be provided before the module is installed.
+Creates Net::Connection objects using sockstat on FreeBSD.
 
-A README file is required for CPAN modules since CPAN extracts the README
-file from a module distribution so that people browsing the archive
-can use it to get an idea of the module's uses. It is usually a good idea
-to provide version information here so that people can decide whether
-fixes for the module are worth downloading.
+    use Net::Connection::FreeBSD_sockstat;
+    
+    my @objects;
+    eval{ @objects=&sockstat_to_nc_objects; };
+
+    # this time don't resolve ports, ptrs, or usernames
+    my $args={
+         ports=>0,
+         ptrs=>0,
+    };
+    eval{ @objects=&sockstat_to_nc_objects( $args )); };
 
 
 INSTALLATION
@@ -38,6 +41,9 @@ You can also look for information at:
 
     Search CPAN
         https://metacpan.org/release/Net-Connection-FreeBSD_sockstat
+
+    Git Repo
+        https://gitea.eesdp.org/vvelox/Net-Connection-FreeBSD_sockstat
 
 
 LICENSE AND COPYRIGHT

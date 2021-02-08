@@ -12,7 +12,7 @@ our @EXPORT=qw(sockstat_to_nc_objects);
 
 =head1 NAME
 
-Net::Connection::FreeBSD_sockstat - The great new Net::Connection::FreeBSD_sockstat!
+Net::Connection::FreeBSD_sockstat - Creates Net::Connection objects using sockstat on FreeBSD.
 
 =head1 VERSION
 
@@ -25,9 +25,23 @@ our $VERSION = '0.0.1';
 
 =head1 SYNOPSIS
 
+    use Net::Connection::FreeBSD_sockstat;
+    
+    my @objects;
+    eval{ @objects=&sockstat_to_nc_objects; };
+
+    # this time don't resolve ports, ptrs, or usernames
+    my $args={
+         ports=>0,
+         ptrs=>0,
+    };
+    eval{ @objects=&sockstat_to_nc_objects( $args )); };
+
 =head1 SUBROUTINES
 
 =head2 sockstat_to_nc_objects
+
+This parses the output of 'sockstat -46s'.
 
 =head3 args hash
 
@@ -311,6 +325,10 @@ L<https://cpanratings.perl.org/d/Net-Connection-FreeBSD_sockstat>
 =item * Search CPAN
 
 L<https://metacpan.org/release/Net-Connection-FreeBSD_sockstat>
+
+=item * Git Repo
+
+L<https://gitea.eesdp.org/vvelox/Net-Connection-FreeBSD_sockstat>
 
 =back
 
